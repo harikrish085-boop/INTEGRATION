@@ -568,15 +568,15 @@ Content-Type: application/json
 ``` json
 {
   "RecipeDownload": {
-    "WipOrderNo": "WO10005842",
+    "WipOrderNo": "WO10005830",
     "OrderQuantity": 500,
-    "OrderType": "ProductionOrder",
+    "OrderType": "ProductionOrder/TrialOrder",
     "UOM": "KG",
-    "ProcessCode": "CELL-AT-01",
+    "ProcessCode": "CELL-AT-090",
     "ProcessRevision": "A.1",
     "ProcessDescription": "Cell Process",
-    "ProductNo": "PN-7720-B",
-    "Equipment": "HT-OVEN-04",
+    "ProductNo": "PN-7720-B0",
+    "Equipment": "HT-OVEN-110",
     "Operations": [
       {
         "OperationNo": "0010",
@@ -591,15 +591,32 @@ Content-Type: application/json
             "UpperSpecificationLimit": 190,
             "TargetValue": 185.5,
             "LowerSpecificationLimit": 180
+          },
+          {
+            "StepSequenceNo": 20,
+            "ParameterCode": "PRESS_SET",
+            "ParameterName": "Chamber Pressure",
+            "ParameterType": 1,
+            "ParameterUOM": "Bar",
+            "UpperSpecificationLimit": 5.5,
+            "TargetValue": 5,
+            "LowerSpecificationLimit": 4.5
+          }
+        ],
+        "WorkInstructions": [
+          {
+            "WorkInstruction": "Ensure door is sealed before heating.",
+            "WorkInstructionRevision": "1.0"
           }
         ]
       }
     ]
   }
 }
+
 ```
 
-# Response Payload
+# Response Payload postive
 
 ``` json
 {
@@ -607,6 +624,15 @@ Content-Type: application/json
     "ResultFlag": true,
     "Message": "Recipe downloaded successfully."
   }
+}
+```
+# Response Payload negative
+``` json
+{
+    "RecipeDownload": {
+        "Message": "PLC ACK Timeout",
+        "ResultFlag": false
+    }
 }
 ```
 ---
