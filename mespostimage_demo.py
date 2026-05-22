@@ -2,7 +2,7 @@ import requests
 import base64
 import os
 from datetime import datetime
-imagename = "Dark-particle-and-fiber-defect-detection-results-under-oblique-texture-a1-a3-dark.webp"
+imagename = "batteries-09-00111-g007-550.jpg"
 image_dir =os.path.join(os.getcwd(),"images")
 image_path = os.path.join(image_dir,imagename)
 
@@ -11,11 +11,11 @@ with open(image_path,"rb") as f:
     img = base64.b64encode(f.read()).decode()
 
 payload = {
-            "machinelocation":"UNIT0010",
+            "machinelocation":"ACOT008",
 			"status": "BAD",
-			"pinholes": "6",
+			"pinholes": "4",
             "imageName": imagename,
-            "imageType": "DFTC001",
+            "imageType": "THR108",
             "createdAt": datetime.now().isoformat(),
             "imageData": img
 }

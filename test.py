@@ -1,188 +1,407 @@
-def doPost(request, session):
+	# =========================================================
+	# IGNITION GATEWAY TIMER SCRIPT
+	#
+	# PURPOSE:
+	#   Read tags recursively from folders
+	#   Batch insert into SQL Server
+	#   Prevent overlapping execution
+	#   Auto recover from stuck execution
+	#
+	# TIMER SETTINGS:
+	#
+	# Delay Type : Fixed Delay
+	# Delay      : 15000 ms
+	# Threading  : Dedicated
+	#
+	# =========================================================
+	
+	#import system
+	logger = system.util.getLogger("KepwareTagStore2")
+	
+	MAX_RUNTIME_MS = 60000
+	
+	
+	# =========================================================
+	# LOCK MANAGEMENT
+	# =========================================================
+	
+	currentMillis = system.date.toMillis(
+	    system.date.now()
+	)
+	
+	# Initialize variables first time
+	if not hasattr(system.util, "tagInsertRunning"):
+	
+	    system.util.tagInsertRunning = False
+	
+	if not hasattr(system.util, "tagInsertStartTime"):
+	
+	    system.util.tagInsertStartTime = 0
+	
+	
+	# ---------------------------------------------------------
+	# CHECK IF PREVIOUS EXECUTION STILL RUNNING
+	# ---------------------------------------------------------
+	
+	if system.util.tagInsertRunning:
+	
+	    runningTime = (
+	
+	        currentMillis
+	        -
+	        system.util.tagInsertStartTime
+	
+	    )
+	
+	    # FORCE RESET IF STUCK
+	    if runningTime > MAX_RUNTIME_MS:
+	
+	        logger.warn(
+	
+	            "Previous execution exceeded timeout. Resetting lock."
+	
+	        )
+	
+	        system.util.tagInsertRunning = False
+	
+	        system.util.tagInsertStartTime = 0
+	
+	    else:
+	
+	        logger.warn(
+	
+	            "Previous execution still running for %s ms. Skipping cycle."
+	
+	            % runningTime
+	
+	        )
+	
+	        return
+	
+	
+	# ---------------------------------------------------------
+	# ACQUIRE LOCK
+	# ---------------------------------------------------------
+	
+	system.util.tagInsertRunning = True
+	
+	system.util.tagInsertStartTime = currentMillis
 
-    import system
-    import base64
-    import traceback
 
-    # IMPORTANT FOR SQL VARBINARY
-    from jarray import array
+# =========================================================
+# RECURSIVE TAG BROWSER
+# =========================================================
 
-    logger = system.util.getLogger("POSTIMAGE")
+def getAllTags(folderPaths):
+
+    allTags = []
 
     try:
 
-        logger.info("POST Image API Called")
+        for folderPath in folderPaths:
 
-        # Safe payload read
-        data = request.get("data", {})
+            browseResults = system.tag.browse(
+                folderPath
+            ).getResults()
 
-        # Read fields safely
-        machinelocation = str(
-            data.get("machinelocation", "")
-        ).strip()
+            for tag in browseResults:
 
-        status = str(
-            data.get("status", "")
-        ).strip()
+                tagType = str(tag["tagType"])
 
-        pinholes = str(
-            data.get("pinholes", "")
-        ).strip()
+                # Atomic Tag
+                if tagType == "AtomicTag":
 
-        imageName = str(
-            data.get("imageName", "")
-        ).strip()
+                    allTags.append(
+                        str(tag["fullPath"])
+                    )
 
-        imageType = str(
-            data.get("imageType", "jpg")
-        ).strip()
+                # Recursive Folder Browse
+                elif tagType == "Folder":
 
-        imageBase64 = data.get(
-            "imageData",
-            ""
-        )
+                    subFolder = str(
+                        tag["fullPath"]
+                    )
 
-        # Use server timestamp
-        createdAt = system.date.now()
+                    subTags = getAllTags(
+                        [subFolder]
+                    )
 
-        logger.info(
-            "machinelocation=%s imageName=%s imageType=%s status=%s pinholes=%s"
-            % (
-                machinelocation,
-                imageName,
-                imageType,
-                status,
-                pinholes
-            )
-        )
-
-        # Validate machinelocation
-        if machinelocation == "":
-
-            logger.warn("machinelocation missing")
-
-            return {
-                "json": {
-                    "status": "error",
-                    "message": "machinelocation missing"
-                }
-            }
-
-        # Validate imageName
-        if imageName == "":
-
-            logger.warn("imageName missing")
-
-            return {
-                "json": {
-                    "status": "error",
-                    "message": "imageName missing"
-                }
-            }
-
-        # Validate imageData
-        if imageBase64 == "":
-
-            logger.warn("imageData missing")
-
-            return {
-                "json": {
-                    "status": "error",
-                    "message": "imageData missing"
-                }
-            }
-
-        # Decode Base64 safely
-        try:
-
-            logger.info("Decoding Base64 image")
-
-            decoded = base64.b64decode(imageBase64)
-
-            # Convert to Java byte[]
-            imageBytes = array(decoded, 'b')
-
-        except Exception as decodeError:
-
-            logger.error("Base64 decode failed")
-            logger.error(str(decodeError))
-
-            return {
-                "json": {
-                    "status": "error",
-                    "message": "Invalid Base64 image"
-                }
-            }
-
-        # Log image size only
-        logger.info(
-            "Image Size Bytes = %s" % len(imageBytes)
-        )
-
-        # SQL Insert Query
-        query = """
-            INSERT INTO images_demo
-            (
-                machinelocation,
-                status,
-                pinholes,
-                imageName,
-                imageType,
-                createdAt,
-                imageData
-            )
-            VALUES
-            (
-                ?, ?, ?, ?, ?, ?, ?
-            )
-        """
-
-        logger.info("Executing SQL Insert")
-
-        # Execute Insert
-        rows = system.db.runPrepUpdate(
-            query,
-            [
-                machinelocation,
-                status,
-                pinholes,
-                imageName,
-                imageType,
-                createdAt,
-                imageBytes
-            ],
-            "MESDEV"
-        )
-
-        logger.info(
-            "Image inserted successfully"
-        )
-
-        # Success Response
-        return {
-            "json": {
-                "status": "success",
-                "rowsAffected": rows,
-                "machinelocation": machinelocation,
-                "imageName": imageName,
-                "imageType": imageType,
-                "createdAt": str(createdAt)
-            }
-        }
+                    allTags.extend(subTags)
 
     except Exception as e:
 
         logger.error(
-            "POST Image Error: " + str(e)
+            "Browse Error : " + str(e)
         )
+
+    return allTags
+
+
+# =========================================================
+# MAIN STORE FUNCTION
+# =========================================================
+
+def storeTags():
+
+    startTime = system.date.now()
+
+    try:
+
+        # -------------------------------------------------
+        # FOLDERS
+        # -------------------------------------------------
+
+        folders = [
+
+            "[default]DataSource/Agratas/IN11/MES",
+
+            "[default]DataSource/Agratas/IN11/E101/MES",
+
+            "[default]DataSource/Agratas/IN11/E101/PRO/ACAL101/MES",
+
+            "[default]DataSource/Agratas/IN11/E101/PRO/ACOT101/MES",
+
+            "[default]DataSource/Agratas/IN11/E101/PRO/AMIX101/MES",
+
+            "[default]DataSource/Agratas/IN11/E101/PRO/MES"
+
+        ]
+
+
+        # -------------------------------------------------
+        # GET TAGS
+        # -------------------------------------------------
+
+        tags = getAllTags(folders)
+
+        if len(tags) == 0:
+
+            logger.warn(
+                "No tags found"
+            )
+
+            return
+
+
+        logger.info(
+            "Total Tags Found : %s"
+            % len(tags)
+        )
+
+
+        # -------------------------------------------------
+        # READ TAGS
+        # -------------------------------------------------
+
+        values = system.tag.readBlocking(
+            tags
+        )
+
+
+        # -------------------------------------------------
+        # PREPARE BATCH INSERT
+        # -------------------------------------------------
+
+        batchArgs = []
+
+        currentTime = system.date.now()
+
+        machineId = "M" + system.date.format(
+            currentTime,
+            "yyyyMMdd"
+        )
+
+
+        for i in range(len(values)):
+
+            try:
+
+                valueObj = values[i]
+
+                if valueObj.quality.isGood():
+
+                    tagName = str(
+                        tags[i]
+                    )
+
+                    tagValue = str(
+                        valueObj.value
+                    )
+
+                    tagQuality = str(
+                        valueObj.quality
+                    )
+
+                    batchArgs.append([
+
+                        machineId,
+
+                        tagName,
+
+                        tagValue,
+
+                        tagQuality,
+
+                        currentTime
+
+                    ])
+
+            except Exception as innerEx:
+
+                logger.error(
+
+                    "Tag Processing Error : %s -> %s"
+
+                    % (
+
+                        tags[i],
+
+                        str(innerEx)
+
+                    )
+
+                )
+
+
+        # -------------------------------------------------
+        # DATABASE INSERT
+        # -------------------------------------------------
+
+        if len(batchArgs) > 0:
+
+            query = """
+
+            INSERT INTO MachineTags
+            (
+
+                machineId,
+
+                tagName,
+
+                tagValue,
+
+                tagQuality,
+
+                eventTime
+
+            )
+
+            VALUES
+            (
+                ?, ?, ?, ?, ?
+            )
+
+            """
+
+
+            # ---------------------------------------------
+            # BATCH INSERT
+            # ---------------------------------------------
+
+            try:
+
+                system.db.runPrepUpdateBatch(
+
+                    query,
+
+                    batchArgs,
+
+                    "Dev_MSSQL_Server"
+
+                )
+
+            except AttributeError:
+
+                logger.info(
+
+                    "runPrepUpdateBatch unavailable; using runPrepUpdate per row"
+
+                )
+
+                for args in batchArgs:
+
+                    system.db.runPrepUpdate(
+
+                        query,
+
+                        args,
+
+                        "Dev_MSSQL_Server"
+
+                    )
+
+
+            logger.info(
+
+                "Inserted %s records successfully"
+
+                % len(batchArgs)
+
+            )
+
+        else:
+
+            logger.warn(
+                "No good quality tags"
+            )
+
+
+    except Exception as e:
 
         logger.error(
-            traceback.format_exc()
+            "StoreTags Error : " + str(e)
         )
 
-        return {
-            "json": {
-                "status": "error",
-                "message": str(e)
-            }
-        }
+
+    finally:
+
+        # -------------------------------------------------
+        # EXECUTION TIME
+        # -------------------------------------------------
+
+        executionTime = system.date.millisBetween(
+
+            startTime,
+
+            system.date.now()
+
+        )
+
+        logger.info(
+
+            "Execution Time : %s ms"
+
+            % executionTime
+
+        )
+
+
+        # -------------------------------------------------
+        # RELEASE LOCK
+        # -------------------------------------------------
+
+        system.util.tagInsertRunning = False
+
+        system.util.tagInsertStartTime = 0
+
+
+# =========================================================
+# EXECUTE ASYNCHRONOUSLY
+# =========================================================
+#import system
+logger = system.util.getLogger("KepwareTagStore2")
+try:
+
+    system.util.invokeAsynchronous(
+        storeTags
+    )
+
+except Exception as e:
+
+    logger.error(
+        "Async Execution Error : " + str(e)
+    )
+
+    system.util.tagInsertRunning = False
+
+    system.util.tagInsertStartTime = 0
