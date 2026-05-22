@@ -240,266 +240,275 @@ MESIntegration
 ```python
 # Ignition WebDev Module - doPost
 
-logger = system.util.getLogger("MES-RecipeDownload")
-
-def doPost(request, session):
-
-    try:
-
-        # =====================================================
-        # Parse JSON Payload
-        # =====================================================
-
-        payload = request['data']
-
-        if "RecipeDownload" not in payload:
-
-            return {
-                "json": {
-                    "RecipeDownload": {
-                        "ResultFlag": False,
-                        "Message": "Invalid Payload"
-                    }
-                }
-            }
-
-        recipe = payload["RecipeDownload"]
-
-        logger.info("Received Recipe Download Request")
-
-        # =====================================================
-        # Extract Header
-        # =====================================================
-
-        wipOrderNo = recipe.get("WipOrderNo")
-        equipment = recipe.get("Equipment")
-        productNo = recipe.get("ProductNo")
-        processCode = recipe.get("ProcessCode")
-        processRevision = recipe.get("ProcessRevision")
-        orderQty = recipe.get("OrderQuantity")
-
-        # =====================================================
-        # Store Recipe Header into MSSQL
-        # =====================================================
-
-        insertHeaderQuery = """
-        INSERT INTO MES_Recipe_Header
-        (
-            WipOrderNo,
-            Equipment,
-            ProductNo,
-            ProcessCode,
-            ProcessRevision,
-            OrderQuantity,
-            Status
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """
-
-        headerArgs = [
-            wipOrderNo,
-            equipment,
-            productNo,
-            processCode,
-            processRevision,
-            orderQty,
-            "RECEIVED"
-        ]
-
-        system.db.runPrepUpdate(
-            insertHeaderQuery,
-            headerArgs,
-            "MESDB"
-        )
-
-        # =====================================================
-        # Get Inserted Header ID
-        # =====================================================
-
-        getIDQuery = """
-        SELECT MAX(ID) AS ID
-        FROM MES_Recipe_Header
-        """
-
-        headerID = system.db.runScalarQuery(
-            getIDQuery,
-            "MESDB"
-        )
-
-        # =====================================================
-        # Store Parameters
-        # =====================================================
-
-        operations = recipe.get("Operations", [])
-
-        for operation in operations:
-
-            operationNo = operation.get("OperationNo")
-
-            parameters = operation.get("Parameters", [])
-
-            for param in parameters:
-
-                insertParamQuery = """
-                INSERT INTO MES_Recipe_Parameters
-                (
-                    HeaderID,
-                    OperationNo,
-                    StepSequenceNo,
-                    ParameterCode,
-                    ParameterName,
-                    TargetValue,
-                    LSL,
-                    USL,
-                    UOM
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """
-
-                paramArgs = [
-                    headerID,
-                    operationNo,
-                    param.get("StepSequenceNo"),
-                    param.get("ParameterCode"),
-                    param.get("ParameterName"),
-                    param.get("TargetValue"),
-                    param.get("LowerSpecificationLimit"),
-                    param.get("UpperSpecificationLimit"),
-                    param.get("ParameterUOM")
-                ]
-
-                system.db.runPrepUpdate(
-                    insertParamQuery,
-                    paramArgs,
-                    "MESDB"
-                )
-
-        logger.info("Recipe Stored into MSSQL")
-
-        # =====================================================
-        # Write Recipe Values to Kepware OPC Tags
-        # =====================================================
-
-        tagPaths = [
-            "[default]Channel1/Device1/Recipe/WipOrderNo",
-            "[default]Channel1/Device1/Recipe/TempSet",
-            "[default]Channel1/Device1/Recipe/PressureSet",
-            "[default]Channel1/Device1/Recipe/DownloadTrigger"
-        ]
-
-        tempSet = 0
-        pressureSet = 0
-
-        for operation in operations:
-
-            for param in operation.get("Parameters", []):
-
-                if param.get("ParameterCode") == "TEMP_SET":
-                    tempSet = param.get("TargetValue")
-
-                elif param.get("ParameterCode") == "PRESS_SET":
-                    pressureSet = param.get("TargetValue")
-
-        values = [
-            wipOrderNo,
-            tempSet,
-            pressureSet,
-            True
-        ]
-
-        writeResults = system.tag.writeBlocking(
-            tagPaths,
-            values
-        )
-
-        logger.info("Recipe Written to OPC Tags")
-
-        # =====================================================
-        # Wait for PLC ACK
-        # =====================================================
-
-        ackTag = "[default]Channel1/Device1/Recipe/Ack"
-
-        timeoutSeconds = 10
-        ackReceived = False
-
-        for i in range(timeoutSeconds):
-
-            ackValue = system.tag.readBlocking([ackTag])[0].value
-
-            if ackValue == True:
-
-                ackReceived = True
-                break
-
-            system.util.sleep(1000)
-
-        # =====================================================
-        # Update Final Status
-        # =====================================================
-
-        if ackReceived:
-
-            updateQuery = """
-            UPDATE MES_Recipe_Header
-            SET Status = 'DOWNLOADED'
-            WHERE ID = ?
-            """
-
-            system.db.runPrepUpdate(
-                updateQuery,
-                [headerID],
-                "MESDB"
-            )
-
-            logger.info("PLC ACK Received")
-
-            return {
-                "json": {
-                    "RecipeDownload": {
-                        "ResultFlag": True,
-                        "Message": "Recipe downloaded and acknowledged by Equipment %s successfully." % equipment
-                    }
-                }
-            }
-
-        else:
-
-            updateQuery = """
-            UPDATE MES_Recipe_Header
-            SET Status = 'FAILED'
-            WHERE ID = ?
-            """
-
-            system.db.runPrepUpdate(
-                updateQuery,
-                [headerID],
-                "MESDB"
-            )
-
-            logger.error("PLC ACK Timeout")
-
-            return {
-                "json": {
-                    "RecipeDownload": {
-                        "ResultFlag": False,
-                        "Message": "PLC ACK Timeout"
-                    }
-                }
-            }
-
-    except Exception as e:
-
-        logger.error(str(e))
-
-        return {
-            "json": {
-                "RecipeDownload": {
-                    "ResultFlag": False,
-                    "Message": str(e)
-                }
-            }
-        }
+	logger = system.util.getLogger("postmes-RecipeDownload")
+	try:
+	
+	        # =====================================================
+	        # Parse JSON Payload
+	        # =====================================================
+	
+	        payload = request['data']
+	
+	        if "RecipeDownload" not in payload:
+	
+	            return {
+	                "json": {
+	                    "RecipeDownload": {
+	                        "ResultFlag": False,
+	                        "Message": "Invalid Payload"
+	                    }
+	                }
+	            }
+	
+	        recipe = payload["RecipeDownload"]
+	
+	        logger.info("Received Recipe Download Request")
+	
+	        # =====================================================
+	        # Extract Header
+	        # =====================================================
+	
+	        wipOrderNo = recipe.get("WipOrderNo")
+	        equipment = recipe.get("Equipment")
+	        productNo = recipe.get("ProductNo")
+	        processCode = recipe.get("ProcessCode")
+	        processRevision = recipe.get("ProcessRevision")
+	        orderQty = recipe.get("OrderQuantity")
+	
+	        # =====================================================
+	        # Store Recipe Header into MSSQL
+	        # =====================================================
+	
+	        insertHeaderQuery = """
+	        INSERT INTO MES_Recipe_Header
+	        (
+	            WipOrderNo,
+	            Equipment,
+	            ProductNo,
+	            ProcessCode,
+	            ProcessRevision,
+	            OrderQuantity,
+	            Status
+	        )
+	        VALUES (?, ?, ?, ?, ?, ?, ?)
+	        """
+	
+	        headerArgs = [
+	            wipOrderNo,
+	            equipment,
+	            productNo,
+	            processCode,
+	            processRevision,
+	            orderQty,
+	            "RECEIVED"
+	        ]
+	
+	        system.db.runPrepUpdate(
+	            insertHeaderQuery,
+	            headerArgs,
+	            "MESDEV"
+	        )
+	
+	        # =====================================================
+	        # Get Inserted Header ID
+	        # =====================================================
+	
+	        getIDQuery = """
+	        SELECT MAX(ID) AS ID
+	        FROM MES_Recipe_Header
+	        """
+	
+	        headerID = system.db.runScalarQuery(
+	            getIDQuery,
+	            "MESDEV"
+	        )
+	
+	        # =====================================================
+	        # Store Parameters
+	        # =====================================================
+	
+	        operations = recipe.get("Operations", [])
+	
+	        for operation in operations:
+	
+	            operationNo = operation.get("OperationNo")
+	
+	            parameters = operation.get("Parameters", [])
+	
+	            for param in parameters:
+	
+	                insertParamQuery = """
+	                INSERT INTO MES_Recipe_Parameters
+	                (
+	                    HeaderID,
+	                    OperationNo,
+	                    StepSequenceNo,
+	                    ParameterCode,
+	                    ParameterName,
+	                    TargetValue,
+	                    LSL,
+	                    USL,
+	                    UOM
+	                )
+	                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	                """
+	
+	                paramArgs = [
+	                    headerID,
+	                    operationNo,
+	                    param.get("StepSequenceNo"),
+	                    param.get("ParameterCode"),
+	                    param.get("ParameterName"),
+	                    param.get("TargetValue"),
+	                    param.get("LowerSpecificationLimit"),
+	                    param.get("UpperSpecificationLimit"),
+	                    param.get("ParameterUOM")
+	                ]
+	
+	                system.db.runPrepUpdate(
+	                    insertParamQuery,
+	                    paramArgs,
+	                    "MESDEV"
+	                )
+	
+	        logger.info("Recipe Stored into MSSQL")
+	
+	        # =====================================================
+	        # Write Recipe Values to Kepware OPC Tags
+	        # =====================================================
+	
+	        tagPaths = [
+	            "[Sample_Tags]M2E_RecipeDownload/RecipeDownload/WipOrderNo",
+	            "[Sample_Tags]M2E_RecipeDownload/RecipeDownload/TempSet",
+	            "[Sample_Tags]M2E_RecipeDownload/RecipeDownload/PressureSet",
+	            "[Sample_Tags]M2E_RecipeDownload/RecipeDownload/DownloadTrigger",
+	            "[Sample_Tags]M2E_RecipeDownload/RecipeDownload/Ack"
+	        ]
+	
+	        tempSet = 0
+	        pressureSet = 0
+	
+	        for operation in operations:
+	
+	            for param in operation.get("Parameters", []):
+	
+	                if param.get("ParameterCode") == "TEMP_SET":
+	                    tempSet = param.get("TargetValue")
+	
+	                elif param.get("ParameterCode") == "PRESS_SET":
+	                    pressureSet = param.get("TargetValue")
+	
+	        values = [
+	            wipOrderNo,
+	            tempSet,
+	            pressureSet,
+	            True,
+	            False
+	        ]
+	        logger.info("Tag Paths: " + str(tagPaths))
+	        logger.info("Tag Values: " + str(values))
+	
+	        writeResults = system.tag.writeBlocking(
+	            tagPaths,
+	            values
+	        )
+	
+	        logger.info("Recipe Written to OPC Tags" + str(writeResults))
+	        triggerTag = "[Sample_Tags]M2E_RecipeDownload/RecipeDownload/DownloadTrigger"
+	        ackTag = "[Sample_Tags]M2E_RecipeDownload/RecipeDownload/Ack"
+	        trigger = system.tag.readBlocking([triggerTag])[0].value
+	        ack = system.tag.readBlocking([ackTag])[0].value
+	        logger.info("Trigger Value for DownloadTrigger " + str(trigger) )
+	        logger.info("Trigger Value for Ack " + str(ack) )
+	
+	        # =====================================================
+	        # Wait for PLC ACK
+	        # =====================================================
+	
+	        ackTag = "[Sample_Tags]M2E_RecipeDownload/RecipeDownload/Ack"
+	
+	        timeoutSeconds = 10
+	        ackReceived = False
+	        import time
+	
+	        for i in range(timeoutSeconds):
+	
+	            ackValue = system.tag.readBlocking([ackTag])[0].value
+	
+	            if ackValue == True:
+	
+	                ackReceived = True
+	                break
+	
+	            #system.util.sleep(1000)
+	            time.sleep(1)
+	
+	        # =====================================================
+	        # Update Final Status
+	        # =====================================================
+	
+	        if ackReceived:
+	
+	            updateQuery = """
+	            UPDATE MES_Recipe_Header
+	            SET Status = 'DOWNLOADED'
+	            WHERE ID = ?
+	            """
+	
+	            system.db.runPrepUpdate(
+	                updateQuery,
+	                [headerID],
+	                "MESDEV"
+	            )
+	
+	            logger.info("PLC ACK Received")
+	
+	            return {
+	                "json": {
+	                    "RecipeDownload": {
+	                        "ResultFlag": True,
+	                        "Message": "Recipe downloaded and acknowledged by Equipment %s successfully." % equipment
+	                    }
+	                }
+	            }
+	
+	        else:
+	
+	            updateQuery = """
+	            UPDATE MES_Recipe_Header
+	            SET Status = 'FAILED'
+	            WHERE ID = ?
+	            """
+	
+	            system.db.runPrepUpdate(
+	                updateQuery,
+	                [headerID],
+	                "MESDEV"
+	            )
+	
+	            logger.error("PLC ACK Timeout")
+	
+	            return {
+	                "json": {
+	                    "RecipeDownload": {
+	                        "ResultFlag": False,
+	                        "Message": "PLC ACK Timeout"
+	                    }
+	                }
+	            }
+	
+	except Exception as e:
+	
+	        logger.error(str(e))
+	
+	        return {
+	            "json": {
+	                "RecipeDownload": {
+	                    "ResultFlag": False,
+	                    "Message": str(e)
+	                }
+	            }
+	        }
 ```
 
 ---
